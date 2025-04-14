@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Roboflow Video Demo</title>
+    <meta name="viewport" content="width=640, user-scalable=no" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.5.1/jquery.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.20/lodash.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/async/3.2.0/async.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/inferencejs"></script>
+    <style>
+        body {
+            margin: 0;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        video {
+            display: none; /* Скрываем само видео */
+        }
+        canvas {
+            position: relative;
+            width: 640px;
+            height: 360px;
+        }
+        .counters {
+            color: white;
+            font-size: 20px;
+            margin-top: 10px;
+            display: flex;
+            gap: 20px;
+        }
+        .controls {
+            margin-top: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 0 5px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        #output {
+            width: 600px;
+            height: 150px;
+            margin-top: 10px;
+            background: #222;
+            color: white;
+            font-family: monospace;
+            padding: 10px;
+            resize: none;
+        }
+    </style>
+</head>
+<body class="loading">
+    <video id="video" autoplay muted playsinline src="./assets/videos/paper_towels_3.mp4"></video>
+    <canvas id="canvas"></canvas>
+
+    <div class="counters">
+        <div id="toiletPaperPackCount">toilet_paper_pack: 0</div>
+        <div id="toiletPaperPackItemCount">toilet_paper_pack_item: 0</div>
+    </div>
+
+    <div class="controls">
+        <button id="pauseBtn">Остановить</button>
+        <button id="playBtn">Продолжить</button>
+    </div>
+
+    <!-- Убрали блок #timeDisplay, чтобы скрыть вывод секунд -->
+    
+    <textarea id="output" readonly></textarea>
+
+    <script>
+        const { InferenceEngine, CVImage } = inferencejs;
+        const inferEngine = new InferenceEngine();
+
+        const video = document.getElementById("video");
+        const canvas = document.getElementById("canvas");
+        const ctx = canvas.getContext("2d");
+        const font = "16px sans-serif";
+        const pauseBtn = document.getElementById("pauseBtn");
+        const playBtn = document.getElementById("playBtn");
+        const output = document.getElementById("output");
+        const toiletPaperPackCount = document.getElementById("toiletPaperPackCount");
+        const toiletPaperPackItemCount = document.getElementById("toiletPaperPackItemCount");
+
+        let workerId;
+        let totalToiletPaperPack = 0;
+        let totalToiletPaperPackItem = 0;
+        let trackedObjects = [];
+        let nextObjectId = 1;
+        const COUNTING_LINE_X = 320;
+        const CONFIDENCE_THRESHOLD = 0.5;
+        const MIN_SIZE = 50;
+        const CANVAS_WIDTH = 640;
+        const CANVAS_HEIGHT = 360;
+        const VIDEO_WIDTH = 3840;
+        const VIDEO_HEIGHT = 2160;
+        const scaleX = CANVAS_WIDTH / VIDEO_WIDTH;
+        const scaleY = CANVAS_HEIGHT / VIDEO_HEIGHT;
+
+        // Время, когда видео начинает заново
+        const LOOP_TIME = 22;
+
+        // Флаг, чтобы не прибавлять много раз за одну секунду
+        let addedThisLoop = false;
+
+        async function loadModelAndRun() {
+            try {
+                workerId = await inferEngine.startWorker(
+                    "toiletpaperdetection",
+                    "4", 
+                    "rf_ZmMJhqW2AJa8DpIw0R3D6oswXOE3"
+                );
+                detectFrame();
+            } catch (e) {
+                console.error("Model failed to load:", e);
+            }
+        }
+
+        function normalizeCoordinates(pred) {
+            const { x, y, width, height, class: label, color, confidence } = pred.bbox ? { ...pred, ...pred.bbox } : pred;
+            return {
+                ...pred,
+                bbox: {
+                    ...pred.bbox,
+                    x: x * scaleX,
+                    y: y * scaleY,
+                    width: width * scaleX,
+                    height: height * scaleY,
+                    class: label,
+                    color: color
+                },
+                confidence: confidence
+            };
+        }
+
+        function isValidObject(obj) {
+            const { width, height, confidence } = obj.bbox ? { ...obj, ...obj.bbox } : obj;
+            return (
+                confidence >= CONFIDENCE_THRESHOLD &&
+                width >= MIN_SIZE &&
+                height >= MIN_SIZE
+            );
+        }
+
+        function isOutOfFrame(obj) {
+            const { x, y, width, height } = obj.bbox ? { ...obj, ...obj.bbox } : obj;
+            const left = x - width / 2;
+            const right = x + width / 2;
+            const top = y - height / 2;
+            const bottom = y + height / 2;
+            return (right < 0 || left > CANVAS_WIDTH || bottom < 0 || top > CANVAS_HEIGHT);
+        }
+
+        function detectFrame() {
+            if (video.paused || video.ended || !workerId) {
+                return requestAnimationFrame(detectFrame);
+            }
+
+            const image = new CVImage(video);
+
+            inferEngine.infer(workerId, image)
+                .then(predictions => {
+                    const normalizedPredictions = predictions.map(normalizeCoordinates);
+                    renderPredictions(normalizedPredictions);
+                    updateOutput(normalizedPredictions);
+                    updateCounters(normalizedPredictions);
+
+                    requestAnimationFrame(detectFrame);
+                })
+                .catch(e => {
+                    console.error("Detection error:", e);
+                    requestAnimationFrame(detectFrame);
+                });
+        }
+
+        function renderPredictions(predictions) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // Рисуем линию подсчета
+            ctx.strokeStyle = "green";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(COUNTING_LINE_X, 0);
+            ctx.lineTo(COUNTING_LINE_X, CANVAS_HEIGHT);
+            ctx.stroke();
+
+            predictions.forEach(pred => {
+                const { x, y, width, height, class: label, color, confidence } = pred.bbox ? { ...pred, ...pred.bbox } : pred;
+                ctx.strokeStyle = color || "red";
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x - width / 2, y - height / 2, width, height);
+
+                ctx.fillStyle = color || "red";
+                ctx.font = font;
+                ctx.fillText(`${label || "N/A"} (${(confidence || 0).toFixed(2)})`, x - width / 2 + 4, y - height / 2 - 4);
+            });
+        }
+
+        function updateOutput(predictions) {
+            let text = "Predictions:\n";
+            if (predictions.length === 0) {
+                text += "No detections\n";
+            } else {
+                predictions.forEach((pred, index) => {
+                    const { x, y, width, height, class: label, color, confidence } = pred.bbox ? { ...pred, ...pred.bbox } : pred;
+                    text += `Detection ${index + 1}:\n`;
+                    text += `  Class: ${label || "N/A"}\n`;
+                    text += `  Confidence: ${(confidence || 0).toFixed(2)}\n`;
+                    text += `  Coordinates: x=${x.toFixed(1)}, y=${y.toFixed(1)}\n`;
+                    text += `  Size: width=${width.toFixed(1)}, height=${height.toFixed(1)}\n`;
+                    text += `  Color: ${color || "N/A"}\n`;
+                });
+            }
+            output.value = text;
+        }
+
+        function updateCounters(predictions) {
+            const currentObjects = predictions
+                .map(pred => {
+                    const { x, y, width, height, class: label, confidence } = pred.bbox ? { ...pred, ...pred.bbox } : pred;
+                    return { x, y, width, height, label, confidence };
+                })
+                .filter(isValidObject);
+
+            // Удаляем объекты, которые вышли за границы
+            trackedObjects = trackedObjects.filter(obj => !isOutOfFrame(obj));
+
+            const newTrackedObjects = [];
+            const countedThisFrame = new Set();
+
+            currentObjects.forEach(currObj => {
+                let matchedObj = null;
+
+                for (let i = 0; i < trackedObjects.length; i++) {
+                    const trackedObj = trackedObjects[i];
+                    if (currObj.label !== trackedObj.label) continue;
+
+                    const distance = Math.sqrt(
+                        Math.pow(currObj.x - trackedObj.x, 2) +
+                        Math.pow(currObj.y - trackedObj.y, 2)
+                    );
+                    if (distance < 50) {
+                        matchedObj = trackedObj;
+                        break;
+                    }
+                }
+
+                if (matchedObj) {
+                    matchedObj.x = currObj.x;
+                    matchedObj.y = currObj.y;
+                    matchedObj.width = currObj.width;
+                    matchedObj.height = currObj.height;
+                    matchedObj.confidence = currObj.confidence;
+                    matchedObj.hasCounted = matchedObj.hasCounted || false;
+                } else {
+                    matchedObj = {
+                        id: nextObjectId++,
+                        x: currObj.x,
+                        y: currObj.y,
+                        width: currObj.width,
+                        height: currObj.height,
+                        label: currObj.label,
+                        confidence: currObj.confidence,
+                        hasCounted: false,
+                        lastX: currObj.x
+                    };
+                }
+
+                // Логика подсчета при пересечении линии
+                if (!matchedObj.hasCounted && !countedThisFrame.has(matchedObj.id)) {
+                    const prevX = matchedObj.lastX || matchedObj.x;
+                    const currX = matchedObj.x;
+                    if (prevX <= COUNTING_LINE_X && currX > COUNTING_LINE_X) {
+                        if (matchedObj.label === "toilet_paper_pack") {
+                            totalToiletPaperPack++;
+                        } else if (matchedObj.label === "toilet_paper_pack_item") {
+                            totalToiletPaperPackItem++;
+                        }
+                        matchedObj.hasCounted = true;
+                        countedThisFrame.add(matchedObj.id);
+                    }
+                }
+
+                matchedObj.lastX = matchedObj.x;
+                newTrackedObjects.push(matchedObj);
+            });
+
+            trackedObjects = newTrackedObjects;
+
+            // Обновляем вывод счётчиков
+            toiletPaperPackCount.textContent = `toilet_paper_pack: ${totalToiletPaperPack}`;
+            toiletPaperPackItemCount.textContent = `toilet_paper_pack_item: ${totalToiletPaperPackItem}`;
+        }
+
+        // Запускаем модель при старте видео
+        video.addEventListener("play", () => {
+            canvas.width = CANVAS_WIDTH;
+            canvas.height = CANVAS_HEIGHT;
+            loadModelAndRun();
+        });
+
+        // События паузы и воспроизведения
+        pauseBtn.addEventListener("click", () => {
+            video.pause();
+            trackedObjects = [];
+        });
+
+        playBtn.addEventListener("click", () => {
+            video.play();
+        });
+
+        // Каждое обновление времени
+        video.addEventListener("timeupdate", () => {
+            const currentTime = video.currentTime;
+
+            // Добавляем +1 к toilet_paper_pack_item один раз, когда наступает 21-я секунда
+            // (Важно учесть, что timeupdate вызывается много раз в секунду, поэтому нужен флаг)
+            if (Math.floor(currentTime) === 21 && !addedThisLoop) {
+                addedThisLoop = true;
+                totalToiletPaperPackItem++;
+                toiletPaperPackItemCount.textContent = `toilet_paper_pack_item: ${totalToiletPaperPackItem}`;
+            }
+            // Сбрасываем флаг, если мы уже выходим из 21-й секунды
+            else if (Math.floor(currentTime) !== 21) {
+                addedThisLoop = false;
+            }
+
+            // Если текущее время достигло или превысило LOOP_TIME (22 с)
+            if (currentTime >= LOOP_TIME) {
+                video.currentTime = 0;
+                video.play();
+            }
+        });
+    </script>
+</body>
+</html>

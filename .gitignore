@@ -1,0 +1,36 @@
+# Node-related
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+
+# Build / Dist folders (если вы создаёте сборку)
+dist/
+build/
+
+# Env files (где лежат секреты/ключи)
+.env
+.env.local
+.env.*.local
+
+# IDE / OS
+*.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Mac system files
+.DS_Store
+
+# Optional: если используете временные файлы
+tmp/
+temp/
+
+# Optional: если используете TypeScript
+*.tsbuildinfo
+
+# Optional: если используете другие специфичные инструменты
+coverage/

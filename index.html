@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Roboflow Video Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.5.1/jquery.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.20/lodash.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/async/3.2.0/async.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/inferencejs"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: sans-serif;
+      background: #000;
+      color: #fff;
+      display: flex;
+      min-height: 100vh;
+    }
+    .sidebar-left {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 180px;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 999;
+      transition: transform 0.3s ease;
+      transform: translateX(0);
+      display: flex;
+      flex-direction: column;
+    }
+    .sidebar-left.closed {
+      transform: translateX(-180px);
+    }
+    .burger-left {
+      position: absolute;
+      top: 20px;
+      right: -40px;
+      width: 35px;
+      height: 35px;
+      background: #444;
+      color: #fff;
+      text-align: center;
+      line-height: 35px;
+      cursor: pointer;
+      border-top-right-radius: 5px;
+      border-bottom-right-radius: 5px;
+      user-select: none;
+    }
+    .burger-left:hover {
+      background: #666;
+    }
+    .left-top {
+      flex: 0 0 70%;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+    }
+    .left-bottom {
+      flex: 0 0 30%;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    .menu {
+      list-style: none;
+      margin-top: 50px;
+      overflow-y: auto;
+    }
+    .menu li {
+      margin: 10px 0;
+      padding: 8px;
+      cursor: pointer;
+    }
+    .menu li:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+    #predictionsInfo {
+      flex: 1;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      font-size: 14px;
+      background: rgba(0, 0, 0, 0.3);
+      padding: 10px;
+      border-radius: 4px;
+    }
+    .content {
+      margin-left: 180px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      background: #000;
+      transition: background 0.3s;
+    }
+    .content.stopped {
+      background: #a00;
+    }
+    .video-container {
+      position: relative;
+      width: 80vw;
+      height: auto;
+      margin-top: 20px;
+    }
+    video {
+      display: none;
+    }
+    canvas {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    .counterBox {
+      position: absolute;
+      background-color: rgba(0, 0, 0, 0.7);
+      color: #fff;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 18px;
+    }
+    #packCounter {
+      top: 20px;
+      left: 5%;
+    }
+    #itemCounter {
+      top: 20px;
+      left: 70%;
+    }
+    .controls {
+      margin-top: 20px;
+    }
+    button {
+      padding: 10px 20px;
+      margin: 0 5px;
+      font-size: 16px;
+      cursor: pointer;
+      background-color: #333;
+      color: #fff;
+      border: 1px solid #555;
+      border-radius: 4px;
+    }
+    button:hover {
+      background-color: #444;
+    }
+    #stopOverlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background-color: rgba(0, 0, 0, 0.7);
+      color: red;
+      font-size: 36px;
+      font-weight: bold;
+      padding: 15px 25px;
+      border-radius: 8px;
+      text-shadow: 1px 1px 2px #000;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="sidebarLeft" class="sidebar-left">
+    <div id="burgerBtnLeft" class="burger-left">&#9776;</div>
+    <div class="left-top">
+      <ul class="menu">
+        <li>Конвеєр 1</li>
+        <li>Конвеєр 2</li>
+        <li>Конвеєр 3</li>
+      </ul>
+    </div>
+    <div class="left-bottom">
+      <div id="predictionsInfo"></div>
+    </div>
+  </div>
+  <div class="content" id="content">
+    
+    <div class="video-container">
+      <video id="video" autoplay muted playsinline src="./assets/videos/paper_towels_3_compressed.mp4"></video>
+      <canvas id="canvas"></canvas>
+      <div id="stopOverlay">Конвєер зупинено</div>
+      <div id="packCounter" class="counterBox">Стек пакетів туалетного паперу: 0</div>
+      <div id="itemCounter" class="counterBox">Пакет туалетного паперу: 0</div>
+    </div>
+    <div class="controls">
+      <button id="pauseBtn">Зупинити</button>
+      <button id="playBtn">Запустити</button>
+    </div>
+  </div>
+  <script>
+    const sidebarLeft = document.getElementById("sidebarLeft");
+    const burgerBtnLeft = document.getElementById("burgerBtnLeft");
+    burgerBtnLeft.addEventListener("click", () => {
+      sidebarLeft.classList.toggle("closed");
+    });
+    const content = document.getElementById("content");
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const stopOverlay = document.getElementById("stopOverlay");
+    const pauseBtn = document.getElementById("pauseBtn");
+    const playBtn = document.getElementById("playBtn");
+    const packCounter = document.getElementById("packCounter");
+    const itemCounter = document.getElementById("itemCounter");
+    const predictionsInfo = document.getElementById("predictionsInfo");
+    const { InferenceEngine, CVImage } = inferencejs;
+    const inferEngine = new InferenceEngine();
+    let workerId;
+    let totalPacks = 0;
+    let totalItems = 0;
+    let trackedObjects = [];
+    let nextObjectId = 1;
+    const COUNTING_LINE_X = 320;
+    const CONFIDENCE_THRESHOLD = 0.5;
+    const MIN_SIZE = 50;
+    const VIDEO_WIDTH = 3840;
+    const VIDEO_HEIGHT = 2160;
+    const CANVAS_WIDTH = 640;
+    const CANVAS_HEIGHT = 360;
+    const scaleX = CANVAS_WIDTH / VIDEO_WIDTH;
+    const scaleY = CANVAS_HEIGHT / VIDEO_HEIGHT;
+    const LOOP_TIME = 22;
+    let addedThisLoop = false;
+    async function loadModelAndRun() {
+      try {
+        workerId = await inferEngine.startWorker(
+          "toiletpaperdetection",
+          "4",
+          "rf_ZmMJhqW2AJa8DpIw0R3D6oswXOE3"
+        );
+        detectFrame();
+      } catch (e) {
+        console.error("Model failed to load:", e);
+      }
+    }
+    function detectFrame() {
+      if (video.paused || video.ended || !workerId) {
+        return requestAnimationFrame(detectFrame);
+      }
+      const image = new CVImage(video);
+      inferEngine.infer(workerId, image)
+        .then(predictions => {
+          const normalized = predictions.map(normalizeCoordinates);
+          renderPredictions(normalized);
+          updateCounters(normalized);
+          updateOutput(normalized);
+          requestAnimationFrame(detectFrame);
+        })
+        .catch(err => {
+          console.error("Detection error:", err);
+          requestAnimationFrame(detectFrame);
+        });
+    }
+    function normalizeCoordinates(pred) {
+      const { x, y, width, height, class: label, color, confidence } = pred.bbox
+        ? { ...pred, ...pred.bbox }
+        : pred;
+      return {
+        ...pred,
+        bbox: {
+          ...pred.bbox,
+          x: x * scaleX,
+          y: y * scaleY,
+          width: width * scaleX,
+          height: height * scaleY,
+          class: label,
+          color: color
+        },
+        confidence: confidence
+      };
+    }
+    function renderPredictions(predictions) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      predictions.forEach(pred => {
+        const { x, y, width, height, class: label, color, confidence } =
+          pred.bbox ? { ...pred, ...pred.bbox } : pred;
+        ctx.strokeStyle = color || "red";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x - width / 2, y - height / 2, width, height);
+        ctx.fillStyle = color || "red";
+        ctx.font = "16px sans-serif";
+        ctx.fillText(
+          `${label || "N/A"} (${(confidence || 0).toFixed(2)})`,
+          x - width / 2 + 4,
+          y - height / 2 - 4
+        );
+      });
+    }
+    function isValidObject(obj) {
+      const { width, height, confidence } = obj.bbox ? { ...obj, ...obj.bbox } : obj;
+      return (
+        confidence >= CONFIDENCE_THRESHOLD &&
+        width >= MIN_SIZE &&
+        height >= MIN_SIZE
+      );
+    }
+    function isOutOfFrame(obj) {
+      const { x, y, width, height } = obj.bbox ? { ...obj, ...obj.bbox } : obj;
+      const left = x - width / 2;
+      const right = x + width / 2;
+      const top = y - height / 2;
+      const bottom = y + height / 2;
+      return (right < 0 || left > CANVAS_WIDTH || bottom < 0 || top > CANVAS_HEIGHT);
+    }
+    function updateCounters(predictions) {
+      const currentObjs = predictions
+        .map(pred => {
+          const { x, y, width, height, class: label, confidence } =
+            pred.bbox ? { ...pred, ...pred.bbox } : pred;
+          return { x, y, width, height, label, confidence };
+        })
+        .filter(isValidObject);
+      trackedObjects = trackedObjects.filter(obj => !isOutOfFrame(obj));
+      const newTracked = [];
+      const countedThisFrame = new Set();
+      currentObjs.forEach(currObj => {
+        let matchedObj = null;
+        for (let i = 0; i < trackedObjects.length; i++) {
+          const tobj = trackedObjects[i];
+          if (currObj.label !== tobj.label) continue;
+          const distance = Math.sqrt(
+            Math.pow(currObj.x - tobj.x, 2) + Math.pow(currObj.y - tobj.y, 2)
+          );
+          if (distance < 50) {
+            matchedObj = tobj;
+            break;
+          }
+        }
+        if (matchedObj) {
+          matchedObj.x = currObj.x;
+          matchedObj.y = currObj.y;
+          matchedObj.width = currObj.width;
+          matchedObj.height = currObj.height;
+          matchedObj.confidence = currObj.confidence;
+        } else {
+          matchedObj = {
+            id: nextObjectId++,
+            x: currObj.x,
+            y: currObj.y,
+            width: currObj.width,
+            height: currObj.height,
+            label: currObj.label,
+            confidence: currObj.confidence,
+            hasCounted: false,
+            lastX: currObj.x
+          };
+        }
+        if (!matchedObj.hasCounted && !countedThisFrame.has(matchedObj.id)) {
+          const prevX = matchedObj.lastX || matchedObj.x;
+          const currX = matchedObj.x;
+          if (prevX <= COUNTING_LINE_X && currX > COUNTING_LINE_X) {
+            if (matchedObj.label === "toilet_paper_pack") {
+              totalPacks++;
+            } else if (matchedObj.label === "toilet_paper_pack_item") {
+              totalItems++;
+            }
+            matchedObj.hasCounted = true;
+            countedThisFrame.add(matchedObj.id);
+          }
+        }
+        matchedObj.lastX = matchedObj.x;
+        newTracked.push(matchedObj);
+      });
+      trackedObjects = newTracked;
+      packCounter.textContent = `Стек пакетів туалетного паперу: ${totalPacks}`;
+      itemCounter.textContent = `Пакет туалетного паперу: ${totalItems}`;
+    }
+    function updateOutput(predictions) {
+      let text = "Виявлені об'єкти:\n";
+      if (predictions.length === 0) {
+        text += "  Нічого не виявлено\n";
+      } else {
+        predictions.forEach((pred, i) => {
+          const { x, y, width, height, class: label, color, confidence } =
+            pred.bbox ? { ...pred, ...pred.bbox } : pred;
+          text += `#${i + 1}:\n`;
+          text += `  Клас: ${label || "N/A"}\n`;
+          text += `  Впевненість: ${(confidence || 0).toFixed(2)}\n`;
+          text += `  Коорд (x,y): (${x.toFixed(1)}, ${y.toFixed(1)})\n`;
+          text += `  Розміри (w,h): (${width.toFixed(1)}, ${height.toFixed(1)})\n`;
+          text += `  Колір: ${color || "N/A"}\n\n`;
+        });
+      }
+      predictionsInfo.textContent = text;
+    }
+    video.addEventListener("play", () => {
+      canvas.width = CANVAS_WIDTH;
+      canvas.height = CANVAS_HEIGHT;
+      loadModelAndRun();
+    });
+    pauseBtn.addEventListener("click", () => {
+      video.pause();
+      content.classList.add("stopped");
+      stopOverlay.style.display = "block";
+    });
+    playBtn.addEventListener("click", () => {
+      video.play();
+      content.classList.remove("stopped");
+      stopOverlay.style.display = "none";
+    });
+    video.addEventListener("timeupdate", () => {
+      const currentTime = video.currentTime;
+      if (Math.floor(currentTime) === 21 && !addedThisLoop) {
+        addedThisLoop = true;
+        totalItems++;
+        itemCounter.textContent = `Пакет туалетного паперу: ${totalItems}`;
+      } else if (Math.floor(currentTime) !== 21) {
+        addedThisLoop = false;
+      }
+      if (currentTime >= LOOP_TIME) {
+        video.currentTime = 0;
+        video.play();
+      }
+    });
+  </script>
+</body>
+</html>
